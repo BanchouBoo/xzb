@@ -242,12 +242,12 @@ pub const Connection = opaque {
             time,
         );
 
-        var err: *GenericError = undefined;
-        const reply = xcb_grab_pointer_reply(self, cookie, &err);
+        // var err: *GenericError = undefined;
+        const reply = xcb_grab_pointer_reply(self, cookie, null);
         defer xzb.destroy(reply);
-        defer xzb.destroy(err);
+        // defer xzb.destroy(err);
 
-        try err.error_code.check();
+        // try err.error_code.check();
 
         return switch (reply.status) {
             .already_grabbed => error.XcbAlreadyGrabbed,
@@ -355,12 +355,12 @@ pub const Connection = opaque {
             keyboard_mode,
         );
 
-        var err: *GenericError = undefined;
-        const reply = xcb_grab_keyboard_reply(self, cookie, &err);
+        // var err: *GenericError = undefined;
+        const reply = xcb_grab_keyboard_reply(self, cookie, null);
         defer xzb.destroy(reply);
-        defer xzb.destroy(err);
+        // defer xzb.destroy(err);
 
-        try err.error_code.check();
+        // try err.error_code.check();
 
         return switch (reply.status) {
             .already_grabbed => error.XcbAlreadyGrabbed,
@@ -420,12 +420,12 @@ pub const Connection = opaque {
     ) Atom {
         const cookie = xcb_intern_atom(self, only_if_exists, @truncate(u16, name.len), name.ptr);
 
-        var err: *GenericError = undefined;
-        const reply = xcb_intern_atom_reply(self, cookie, &err);
+        // var err: *GenericError = undefined;
+        const reply = xcb_intern_atom_reply(self, cookie, null);
         defer xzb.destroy(reply);
-        defer xzb.destroy(err);
+        // defer xzb.destroy(err);
 
-        try err.error_code.check();
+        // try err.error_code.check();
 
         return reply.atom;
     }
@@ -928,12 +928,12 @@ pub const Window = enum(u32) {
             data_length,
         );
 
-        var err: *GenericError = undefined;
-        const reply = xcb_get_property_reply(connection, cookie, &err);
+        // var err: *GenericError = undefined;
+        const reply = xcb_get_property_reply(connection, cookie, null);
         // xzb.destroy(reply);
-        defer xzb.destroy(err);
+        // defer xzb.destroy(err);
 
-        try err.error_code.check();
+        // try err.error_code.check();
 
         return reply;
         // return reply.getValue();
