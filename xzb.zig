@@ -9,6 +9,10 @@ const comptimePrint = std.fmt.comptimePrint;
 // TODO: reorganize everything, maybe into multiple files
 // TODO: add lots of error checking
 // TODO: abstract out the value_list generation pattern I'm using in Window and GraphicsContext
+// TODO: add doc comments
+// TODO: Change masks to be enum sets from the standard library (or IntegerBitSet directly? might be the only way)
+// TODO: should I prefer checked or unchecked functions? requesting a check is blocking but how bad is this in practice?
+// TODO: remove parameter names from extern function definitions
 
 const raw_allocator = std.heap.raw_c_allocator;
 
