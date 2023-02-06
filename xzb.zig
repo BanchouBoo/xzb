@@ -1,7 +1,7 @@
 const std = @import("std");
+const xzb = @This();
 
 const assert = std.debug.assert;
-const comptimePrint = std.fmt.comptimePrint;
 
 // TODO: enum type for depth?
 // TODO: wrapper types for Window, Pixmap, etc that hold their connections
@@ -13,6 +13,8 @@ const comptimePrint = std.fmt.comptimePrint;
 // TODO: Change masks to be enum sets from the standard library (or IntegerBitSet directly? might be the only way)
 // TODO: should I prefer checked or unchecked functions? requesting a check is blocking but how bad is this in practice?
 // TODO: remove parameter names from extern function definitions
+
+const log = std.log.scoped(.xzb);
 
 const raw_allocator = std.heap.raw_c_allocator;
 
@@ -26,11 +28,35 @@ pub fn timestamp(time: u32) Timestamp {
     return @intToEnum(Timestamp, time);
 }
 
-pub const Keycode = enum(u8) { _ };
-
-pub fn Id(comptime _: type) type {
-    return enum(u32) { _ };
-}
+pub const Keycode = enum(u8) { any = 0, _ };
+// pub const Keysym = @import("keysym.zig").Keysym;
+pub usingnamespace @import("keysym.zig");
+// pub const Keysym = xzb.Keysym;
+// pub fn keysymToNames(keysym: Keysym) []const u8 {
+//     var buf: [10]u8 = undefined;
+//     const keysym_string = std.fmt.bufPrint(&buf, "{d}", .{@enumToInt(keysym)}) catch unreachable;
+//     inline for (@TypeOf(std.meta.fields(xzb.KeysymValues))) |field| {
+//         if (std.meta.eql(u8, keysym_string, field.name)) {
+//             return @field(xzb.KeysymValues, keysym_string);
+//         }
+//     }
+//     log.err("No names for keysym value {s}!", .{keysym_string});
+//     return "";
+// }
+// pub fn keysym(value: u32) Keysym {
+//     return @intToEnum(Keysym, value);
+// }
+pub const MouseButton = enum(u8) {
+    any = 0,
+    left = 1,
+    middle = 2,
+    right = 3,
+    scroll_up = 4,
+    scroll_down = 5,
+    scroll_left = 6,
+    scroll_right = 7,
+    _,
+};
 
 pub const Connection = opaque {
     pub fn connect(display_name: ?[*:0]const u8, screen: ?*c_int) !*Connection {
@@ -84,13 +110,13 @@ pub const Connection = opaque {
     }
     extern fn xcb_flush(c: *Connection) c_int;
 
-    pub fn generateId(self: *Connection, comptime T: type) !Id(T) {
+    pub fn generateId(self: *Connection, comptime T: type) !T {
         try self.checkError();
         switch (T) {
             Window, Pixmap, GraphicsContext, Colormap, Font => {},
             else => @compileError("Invalid type '" ++ @typeName(T) ++ "' for Connection.generateId()!"),
         }
-        return @intToEnum(Id(T), xcb_generate_id(self));
+        return @intToEnum(T, xcb_generate_id(self));
     }
     extern fn xcb_generate_id(c: *Connection) u32;
 
@@ -133,7 +159,7 @@ pub const Connection = opaque {
             },
         };
 
-        raw_allocator.destroy(generic_event);
+        xzb.destroy(generic_event);
         return result;
     }
     extern fn xcb_wait_for_event(c: *Connection) ?*Event.Generic;
@@ -155,7 +181,7 @@ pub const Connection = opaque {
             },
         };
 
-        raw_allocator.destroy(generic_event);
+        xzb.destroy(generic_event);
         return result;
     }
     extern fn xcb_poll_for_event(c: *Connection) ?*Event.Generic;
@@ -177,10 +203,21 @@ pub const Connection = opaque {
             },
         };
 
-        raw_allocator.destroy(generic_event);
+        xzb.destroy(generic_event);
         return result;
     }
     extern fn xcb_poll_for_queued_event(c: *Connection) ?*Event.Generic;
+
+    // pub fn sendEvent(self: *Connection) void {
+    //     _ = self;
+    // }
+    // extern fn xcb_send_event(
+    //     c: *Connection,
+    //     propogate: bool,
+    //     destination: Window,
+    //     event_mask: EventMask,
+    //     event: Event,
+    // ) VoidCookie;
 
     pub fn grabPointer(
         self: *Connection,
@@ -193,7 +230,7 @@ pub const Connection = opaque {
         cursor: Cursor,
         time: Timestamp,
     ) !void {
-        const grab_pointer_cookie = xcb_grab_pointer(
+        const cookie = xcb_grab_pointer(
             self,
             owner_events,
             grab_window,
@@ -205,46 +242,327 @@ pub const Connection = opaque {
             time,
         );
 
-        const pointer_reply = xcb_grab_pointer_reply(
-            self,
-            grab_pointer_cookie,
-            null,
-        );
-        defer raw_allocator.destroy(pointer_reply);
+        var err: *GenericError = undefined;
+        const reply = xcb_grab_pointer_reply(self, cookie, &err);
+        defer xzb.destroy(reply);
+        defer xzb.destroy(err);
 
-        return switch (pointer_reply.status) {
-            .already_grabbed => error.XcbCursorAlreadyGrabbed,
-            .frozen => error.XcbCursorFrozen,
-            .invalid_time => error.XcbCursorInvalidTime,
-            .not_viewable => error.XcbCursorNotViewable,
+        try err.error_code.check();
+
+        return switch (reply.status) {
+            .already_grabbed => error.XcbAlreadyGrabbed,
+            .frozen => error.XcbFrozen,
+            .invalid_time => error.XcbInvalidTime,
+            .not_viewable => error.XcbNotViewable,
             .success => {},
         };
     }
-    extern fn xcb_grab_pointer(
-        c: *Connection,
-        owner_events: bool,
-        grab_window: Window,
-        event_mask: EventMask,
-        pointer_mode: GrabMode,
-        keyboard_mode: GrabMode,
-        confine_to: Window,
-        cursor: Cursor,
-        time: Timestamp,
-    ) GrabPointerCookie;
-    extern fn xcb_grab_pointer_reply(
-        c: *Connection,
-        cookie: GrabPointerCookie,
-        e: ?**GenericError, // TODO: what would be filled into the error? will there be anything not covered by status?
-    ) *GrabPointerReply;
+    extern fn xcb_grab_pointer(c: *Connection, owner_events: bool, grab_window: Window, event_mask: EventMask, pointer_mode: GrabMode, keyboard_mode: GrabMode, confine_to: Window, cursor: Cursor, time: Timestamp) GrabCookie;
+    extern fn xcb_grab_pointer_reply(c: *Connection, cookie: GrabCookie, e: ?**GenericError) *GrabReply;
 
     pub fn ungrabPointer(self: *Connection, time: Timestamp) void {
         _ = xcb_ungrab_pointer(self, time);
     }
     extern fn xcb_ungrab_pointer(c: *Connection, time: Timestamp) VoidCookie;
+
+    // TODO: ungrab fn
+    // TODO: rearrange arguments
+    pub fn grabButton(
+        self: *Connection,
+        button: MouseButton,
+        modifiers: ModMask,
+        owner_events: bool,
+        grab_window: Window,
+        event_mask: EventMask,
+        confine_to: Window,
+        cursor: Cursor,
+        pointer_mode: GrabMode,
+        keyboard_mode: GrabMode,
+    ) !void {
+        const cookie = xcb_grab_button_checked(
+            self,
+            owner_events,
+            grab_window,
+            event_mask,
+            pointer_mode,
+            keyboard_mode,
+            confine_to,
+            cursor,
+            button,
+            modifiers,
+        );
+        try self.requestCheck(cookie);
+    }
+    extern fn xcb_grab_button_checked(c: *Connection, owner_events: bool, grab_window: Window, event_mask: EventMask, pointer_mode: GrabMode, keyboard_mode: GrabMode, confine_to: Window, cursor: Cursor, button: MouseButton, modifiers: ModMask) VoidCookie;
+
+    pub fn ungrabButton(
+        self: *Connection,
+        button: MouseButton,
+        modifiers: ModMask,
+        grab_window: Window,
+    ) void {
+        _ = xcb_ungrab_button(self, button, grab_window, modifiers);
+    }
+    extern fn xcb_ungrab_button(c: *Connection, button: MouseButton, grab_window: Window, modifiers: ModMask) VoidCookie;
+
+    pub fn grabKey(
+        self: *Connection,
+        key: Keycode,
+        modifiers: ModMask,
+        owner_events: bool,
+        grab_window: Window,
+        pointer_mode: GrabMode,
+        keyboard_mode: GrabMode,
+    ) !void {
+        const cookie = xcb_grab_key_checked(
+            self,
+            owner_events,
+            grab_window,
+            modifiers,
+            key,
+            pointer_mode,
+            keyboard_mode,
+        );
+        try self.requestCheck(cookie);
+    }
+    extern fn xcb_grab_key_checked(c: *Connection, owner_events: bool, grab_window: Window, modifiers: ModMask, key: Keycode, pointer_mode: GrabMode, keyboard_mode: GrabMode) VoidCookie;
+
+    pub fn ungrabKey(
+        self: *Connection,
+        key: Keycode,
+        modifiers: ModMask,
+        grab_window: Window,
+    ) void {
+        _ = xcb_ungrab_key(self, key, grab_window, modifiers);
+    }
+    extern fn xcb_ungrab_key(c: *Connection, key: Keycode, grab_window: Window, modifiers: ModMask) VoidCookie;
+
+    // TODO: ungrab fn
+    pub fn grabKeyboard(
+        self: *Connection,
+        owner_events: bool,
+        grab_window: Window,
+        pointer_mode: GrabMode,
+        keyboard_mode: GrabMode,
+        time: Timestamp,
+    ) !void {
+        const cookie = xcb_grab_keyboard(
+            self,
+            owner_events,
+            grab_window,
+            time,
+            pointer_mode,
+            keyboard_mode,
+        );
+
+        var err: *GenericError = undefined;
+        const reply = xcb_grab_keyboard_reply(self, cookie, &err);
+        defer xzb.destroy(reply);
+        defer xzb.destroy(err);
+
+        try err.error_code.check();
+
+        return switch (reply.status) {
+            .already_grabbed => error.XcbAlreadyGrabbed,
+            .frozen => error.XcbFrozen,
+            .invalid_time => error.XcbInvalidTime,
+            .not_viewable => error.XcbNotViewable,
+            .success => {},
+        };
+    }
+    extern fn xcb_grab_keyboard(c: *Connection, owner_events: bool, grab_window: Window, time: Timestamp, pointer_mode: GrabMode, keyboard_mode: GrabMode) GrabCookie;
+    extern fn xcb_grab_keyboard_reply(c: *Connection, cookie: GrabCookie, e: ?**GenericError) *GrabReply;
+
+    pub fn ungrabKeyboard(self: *Connection, time: Timestamp) void {
+        _ = xcb_ungrab_keyboard(self, time);
+    }
+    extern fn xcb_ungrab_keyboard(c: *Connection, time: Timestamp) VoidCookie;
+
+    pub fn allowEvents(self: *Connection, mode: AllowMode, time: Timestamp) void {
+        _ = xcb_allow_events(self, mode, time);
+    }
+    extern fn xcb_allow_events(c: *Connection, mode: AllowMode, time: Timestamp) VoidCookie;
+
+    pub fn fakeInput(
+        self: *Connection,
+        event_type: EventType,
+        detail: Keycode,
+        root: Window,
+        root_x: i16,
+        root_y: i16,
+        device_id: u8,
+        time: Timestamp,
+    ) !void {
+        const cookie = xcb_test_fake_input_checked(
+            self,
+            event_type,
+            detail,
+            time,
+            root,
+            root_x,
+            root_y,
+            device_id,
+        );
+        try self.requestCheck(cookie);
+    }
+    extern fn xcb_test_fake_input_checked(c: *Connection, @"type": EventType, detail: Keycode, time: Timestamp, root: Window, rootX: i16, rootY: i16, deviceid: u8) VoidCookie;
+
+    pub fn requestCheck(self: *Connection, cookie: VoidCookie) !void {
+        const err = xcb_request_check(self, cookie) orelse return;
+        try err.error_code.check();
+    }
+    extern fn xcb_request_check(c: *Connection, cookie: VoidCookie) ?*GenericError;
+
+    pub fn internAtom(
+        self: *Connection,
+        only_if_exists: bool,
+        name: []const u8,
+    ) Atom {
+        const cookie = xcb_intern_atom(self, only_if_exists, @truncate(u16, name.len), name.ptr);
+
+        var err: *GenericError = undefined;
+        const reply = xcb_intern_atom_reply(self, cookie, &err);
+        defer xzb.destroy(reply);
+        defer xzb.destroy(err);
+
+        try err.error_code.check();
+
+        return reply.atom;
+    }
+    extern fn xcb_intern_atom(c: *Connection, only_if_exists: bool, name_len: u16, name: [*]const u8) InternAtomCookie;
+    extern fn xcb_intern_atom_reply(c: *Connection, cookie: InternAtomCookie, e: ?**GenericError) *InternAtomReply;
+
+    pub fn getActiveWindow(self: *Connection, root: Window) !Window {
+        const active_window_atom = self.internAtom(true, "_NET_ACTIVE_WINDOW");
+        if (active_window_atom == .none) return error.XcbNoActiveWindow;
+        // TODO: if the atom exists is the property guaranteed to exist?
+        const property_reply = root.getProperty(self, false, active_window_atom, .window, 0, 1);
+        const data = property_reply.getValue().?;
+        return @ptrCast(*Window, @alignCast(@alignOf(*Window), data)).*;
+    }
+
+    // TODO: error not getting filled?
+    pub fn getInputFocus(self: *Connection) Window {
+        const cookie = xcb_get_input_focus(self);
+
+        // var err: *GenericError = undefined;
+        const reply = xcb_get_input_focus_reply(self, cookie, null);
+        defer xzb.destroy(reply);
+        // defer xzb.destroy(err);
+
+        // try err.error_code.check();
+
+        var result = reply.focus;
+
+        return result;
+    }
+    extern fn xcb_get_input_focus(c: *Connection) GetInputFocusCookie;
+    extern fn xcb_get_input_focus_reply(c: *Connection, cookie: GetInputFocusCookie, e: ?**GenericError) *GetInputFocusReply;
+
+    // TODO: test this to make sure it's accurate
+    pub fn getTopLevelParent(self: *Connection, window: Window) Window {
+        var result = window;
+
+        var tree = self.queryTree(result);
+        while (tree.parent != tree.root and result != tree.root) {
+            result = tree.parent;
+            tree.destroy();
+            tree = self.queryTree(result);
+        }
+        tree.destroy();
+
+        return result;
+    }
+
+    // TODO: is freeing it safe or are children owned by the tree?
+    // TODO: error doesn't seem to get filled?
+    pub fn queryTree(self: *Connection, window: Window) *QueryTreeReply {
+        const cookie = xcb_query_tree(self, window);
+
+        // var err: *GenericError = undefined;
+        const reply = xcb_query_tree_reply(self, cookie, null);
+        // defer xzb.destroy(reply);
+        // defer xzb.destroy(err);
+
+        // try err.error_code.check();
+
+        return reply;
+        // return reply.*;
+    }
+    extern fn xcb_query_tree(c: *Connection, window: Window) QueryTreeCookie;
+    extern fn xcb_query_tree_reply(c: *Connection, cookie: QueryTreeCookie, e: ?**GenericError) *QueryTreeReply;
+
+    pub fn getFileDescriptor(self: *Connection) std.os.fd_t {
+        return xcb_get_file_descriptor(self);
+    }
+    extern fn xcb_get_file_descriptor(c: *Connection) std.os.fd_t;
 };
 
-pub const Colormap = packed struct {
-    id: Id(Colormap),
+pub const KeySymbols = opaque {
+    pub fn alloc(connection: *Connection) !*KeySymbols {
+        return xcb_key_symbols_alloc(connection) orelse {
+            try connection.checkError();
+            return error.XcbKeySymbolAllocationError;
+        };
+    }
+    extern fn xcb_key_symbols_alloc(c: *Connection) ?*KeySymbols;
+
+    pub fn getKeysym(self: *KeySymbols, keycode: Keycode, column: c_int) xzb.Keysym {
+        return xcb_key_symbols_get_keysym(self, keycode, column);
+    }
+    extern fn xcb_key_symbols_get_keysym(syms: *KeySymbols, keycode: Keycode, col: c_int) xzb.Keysym;
+
+    // TODO: how should I make managing this memory more ergonomic?
+    // TODO: handle null value https://cgit.freedesktop.org/xcb/util-keysyms/tree/keysyms/keysyms.c
+    // pub fn getKeycode(self: *KeySymbols, keysym: xzb.Keysym) []Keycode {
+    //     const keycodes = xcb_key_symbols_get_keycode(self, keysym) orelse {
+    //         std.debug.print("KEYCODE NULL\n", .{});
+    //         return &.{};
+    //     };
+    //     return std.mem.sliceTo(keycodes, @intToEnum(Keycode, 0));
+    // }
+    // extern fn xcb_key_symbols_get_keycode(syms: *KeySymbols, keysym: xzb.Keysym) ?[*:@intToEnum(Keycode, 0)]Keycode;
+
+    const keysyms_per_keycode = 4;
+    pub fn getKeycode(self: *KeySymbols, connection: *Connection, keysym: xzb.Keysym) ![]Keycode {
+        var result: [keysyms_per_keycode]Keycode = undefined;
+        var result_len: usize = 0;
+        const setup = try connection.getSetup();
+
+        {
+            const min_keycode: u8 = @enumToInt(setup.min_keycode);
+            const max_keycode: u8 = @enumToInt(setup.max_keycode);
+            var keycode: u8 = min_keycode;
+            while (keycode < max_keycode) : (keycode += 1) {
+                {
+                    var column: u8 = 0;
+                    while (column < keysyms_per_keycode) : (column += 1) {
+                        const ks = self.getKeysym(@intToEnum(Keycode, keycode), column);
+                        if (ks == keysym) {
+                            result[result_len] = @intToEnum(Keycode, keycode);
+                            result_len += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        return result[0..result_len];
+    }
+
+    pub fn refreshMapping(self: *KeySymbols, event: Event.MappingNotify) bool {
+        return if (xcb_refresh_keyboard_mapping(self, &event) == 1) true else false;
+    }
+    extern fn xcb_refresh_keyboard_mapping(syms: *KeySymbols, event: *Event.MappingNotify) c_int;
+
+    pub fn free(self: *KeySymbols) void {
+        xcb_key_symbols_free(self);
+    }
+    extern fn xcb_key_symbols_free(syms: *KeySymbols) void;
+};
+
+pub const Colormap = enum(u32) {
+    _,
 
     pub fn create(
         connection: *Connection,
@@ -253,7 +571,8 @@ pub const Colormap = packed struct {
         window: Window,
         visual: VisualId,
     ) !Pixmap {
-        const colormap = Colormap{ .id = try connection.generateId(Colormap) };
+        // const colormap = Colormap{ .id = try connection.generateId(Colormap) };
+        const colormap = try connection.generateId(Colormap);
         _ = xcb_create_colormap(connection, alloc, mid, window, visual);
         return colormap;
     }
@@ -271,23 +590,22 @@ pub const Colormap = packed struct {
     extern fn xcb_free_colormap(c: *Connection, cmap: Colormap) VoidCookie;
 };
 
-pub const Font = packed struct {
-    id: Id(Font),
+pub const Font = enum(u32) {
+    _,
 
     pub fn open(
         connection: *Connection,
         name: []const u8,
     ) Font {
-        const font = Font{ .id = try connection.generateId(Font) };
+        const font = try connection.generateId(Font);
         xcb_open_font(connection, font, @truncate(u16, name.len), name.ptr);
     }
     extern fn xcb_open_font(c: *Connection, fid: Font, name_len: u16, name: [*]const u8) VoidCookie;
 };
 
-pub const Cursor = packed struct {
-    id: Id(Cursor),
-
-    pub const none = Cursor{ .id = @intToEnum(Id(Cursor), 0) };
+pub const Cursor = enum(u32) {
+    none = 0,
+    _,
 };
 
 pub const Screen = extern struct {
@@ -425,21 +743,24 @@ pub const Atom = enum(u32) {
     cap_height = 66,
     wm_class = 67,
     wm_transient_for = 68,
+    _,
 
     pub const any = Atom.none;
 };
 
 // TODO: rename to just Visual?
-pub const VisualId = packed struct {
-    id: Id(VisualId),
+pub const VisualId = enum(u32) {
+    copy_from_parent = 0,
+    _,
 
-    pub const copy_from_parent = VisualId{ .id = @intToEnum(Id(VisualId), 0) };
+    // pub const copy_from_parent = VisualId{ .id = @intToEnum(VisualId, 0) };
 };
 
-pub const Window = packed struct {
-    id: Id(Window),
+pub const Window = enum(u32) {
+    none = 0,
+    _,
 
-    pub const none = Window{ .id = @intToEnum(Id(Window), 0) };
+    // pub const none = Window{ .id = @intToEnum(Window, 0) };
 
     pub const Options = struct {
         depth: u8, // TODO: figure out legal depth values
@@ -542,7 +863,7 @@ pub const Window = packed struct {
             }
         }
 
-        const window = Window{ .id = try connection.generateId(Window) };
+        const window = try connection.generateId(Window);
         _ = xcb_create_window(
             connection,
             options.depth,
@@ -585,6 +906,42 @@ pub const Window = packed struct {
     }
     extern fn xcb_create_window(c: *Connection, depth: u8, wid: Window, parent: Window, x: i16, y: i16, width: u16, height: u16, border_width: u16, _class: WindowClass, visual: VisualId, value_mask: ValueMask, value_list: [*]const u32) VoidCookie;
 
+    // TODO: figure out how I can make the return type more useful; I should
+    //       be able to assign return types based on property_type.
+    //       Also think about data_offset/data_length
+    pub fn getProperty(
+        self: Window,
+        connection: *Connection,
+        delete: bool,
+        property: Atom,
+        property_type: Atom,
+        data_offset: u32,
+        data_length: u32,
+    ) !*GetPropertyReply {
+        const cookie = xcb_get_property(
+            connection,
+            delete,
+            self,
+            property,
+            property_type,
+            data_offset,
+            data_length,
+        );
+
+        var err: *GenericError = undefined;
+        const reply = xcb_get_property_reply(connection, cookie, &err);
+        // xzb.destroy(reply);
+        defer xzb.destroy(err);
+
+        try err.error_code.check();
+
+        return reply;
+        // return reply.getValue();
+    }
+    extern fn xcb_get_property(c: *Connection, _delete: bool, window: Window, property: Atom, @"type": Atom, long_offset: u32, long_length: u32) GetPropertyCookie;
+    extern fn xcb_get_property_reply(c: *Connection, cookie: GetPropertyCookie, e: ?**GenericError) *GetPropertyReply;
+
+    // TODO: I may be able to determine data type from property_type and forego format entirely
     pub fn changeProperty(
         self: Window,
         connection: *Connection,
@@ -611,22 +968,26 @@ pub const Window = packed struct {
     const PropertyFormat = enum(u8) { u8 = 8, u16 = 16, u32 = 32 };
     extern fn xcb_change_property(connection: *Connection, mode: PropertyMode, window: Window, property: Atom, property_type: Atom, format: PropertyFormat, data_len: u32, data: [*]const u8) VoidCookie;
 
-    pub fn destroy(self: Window, connection: *Connection) void {
-        connection.destroy(Window, self);
-    }
-
     pub fn map(self: Window, connection: *Connection) void {
         _ = xcb_map_window(connection, self);
     }
     extern fn xcb_map_window(connection: *Connection, window: Window) VoidCookie;
 
+    pub fn getGeometry(self: Window, connection: *Connection) !Geometry {
+        return self.toDrawable().getGeometry(connection);
+    }
+
     pub fn toDrawable(self: Window) Drawable {
         return Drawable.new(self);
     }
+
+    pub fn destroy(self: Window, connection: *Connection) void {
+        connection.destroy(Window, self);
+    }
 };
 
-pub const Pixmap = packed struct {
-    id: Id(Pixmap),
+pub const Pixmap = enum(u32) {
+    _,
 
     pub fn create(
         connection: *Connection,
@@ -635,7 +996,7 @@ pub const Pixmap = packed struct {
         width: u16,
         height: u16,
     ) !Pixmap {
-        const pixmap = Pixmap{ .id = try connection.generateId(Pixmap) };
+        const pixmap = try connection.generateId(Pixmap);
         _ = xcb_create_pixmap(connection, depth, pixmap, drawable, width, height);
         return pixmap;
     }
@@ -654,13 +1015,26 @@ pub const Pixmap = packed struct {
     }
     extern fn xcb_shape_mask(c: *Connection, operation: ShapeOperation, destination_kind: ShapeKind, destination_window: Window, x_offset: i16, y_offset: i16, source_bitmap: Pixmap) VoidCookie;
 
-    pub fn destroy(self: Pixmap, connection: *Connection) void {
-        connection.destroy(Pixmap, self);
+    pub fn getGeometry(self: Pixmap, connection: *Connection) !Geometry {
+        return self.toDrawable().getGeometry(connection);
     }
 
     pub fn toDrawable(self: Pixmap) Drawable {
         return Drawable.new(self);
     }
+
+    pub fn destroy(self: Pixmap, connection: *Connection) void {
+        connection.destroy(Pixmap, self);
+    }
+};
+
+pub const Geometry = struct {
+    x: i16,
+    y: i16,
+    width: u16,
+    height: u16,
+
+    border_width: u16,
 };
 
 pub const Drawable = extern union {
@@ -674,11 +1048,48 @@ pub const Drawable = extern union {
             else => @compileError("Drawable type must be Window or Pixmap!"),
         };
     }
+
+    // TODO: error doesn't seem to be filled? why is that happening
+    pub fn getGeometry(self: Drawable, connection: *Connection) Geometry {
+        const cookie = xcb_get_geometry(connection, self);
+
+        // var err: *GenericError = undefined;
+        const reply = xcb_get_geometry_reply(connection, cookie, null);
+        defer xzb.destroy(reply);
+        // defer xzb.destroy(err);
+
+        // std.debug.print("{any}\n", .{@bitCast(u32, self)});
+        // try err.error_code.check();
+
+        return Geometry{
+            .x = reply.x,
+            .y = reply.y,
+            .width = reply.width,
+            .height = reply.height,
+            .border_width = reply.border_width,
+        };
+    }
+    extern fn xcb_get_geometry(c: *Connection, drawable: Drawable) GeometryCookie;
+    extern fn xcb_get_geometry_reply(c: *Connection, cookie: GeometryCookie, e: ?**GenericError) *GeometryReply;
+};
+
+pub const GeometryReply = extern struct {
+    response_type: u8,
+    depth: u8,
+    sequence: u16,
+    length: u32,
+    root: Window,
+    x: i16,
+    y: i16,
+    width: u16,
+    height: u16,
+    border_width: u16,
+    pad0: [2]u8,
 };
 
 // TODO: wrapper type that holds it's drawable? probably not, as a single GC can be reused for multiple drawables
-pub const GraphicsContext = packed struct {
-    id: Id(GraphicsContext),
+pub const GraphicsContext = enum(u32) {
+    _,
 
     pub const ValueMask = enum(u32) {
         none = 0,
@@ -774,7 +1185,7 @@ pub const GraphicsContext = packed struct {
                 i += 1;
             }
         }
-        const gc = GraphicsContext{ .id = try connection.generateId(GraphicsContext) };
+        const gc = try connection.generateId(GraphicsContext);
         _ = xcb_create_gc(connection, gc, drawable, mask, &value_list);
         return gc;
     }
@@ -811,7 +1222,7 @@ pub const GraphicsContext = packed struct {
     const DrawOptions = struct { coordinate_mode: CoordinateMode = .origin };
     const CoordinateMode = enum(u8) { origin = 0, previous = 1 };
 
-    pub fn poly_line(
+    pub fn polyLine(
         self: GraphicsContext,
         connection: *Connection,
         drawable: Drawable,
@@ -829,7 +1240,7 @@ pub const GraphicsContext = packed struct {
     }
     extern fn xcb_poly_line(c: *Connection, coordinate_mode: CoordinateMode, drawable: Drawable, gc: GraphicsContext, points_len: u32, points: [*]const Point) VoidCookie;
 
-    pub fn poly_fill_rectangle(
+    pub fn polyFillRectangle(
         self: GraphicsContext,
         connection: *Connection,
         drawable: Drawable,
@@ -880,7 +1291,7 @@ pub const GraphicsContext = packed struct {
 // TODO: figure out how to use this
 pub const GenericError = extern struct {
     response_type: u8,
-    error_code: u8,
+    error_code: GenericErrorCode,
     sequence: u16,
     resource_id: u32,
     minor_code: u16,
@@ -890,16 +1301,71 @@ pub const GenericError = extern struct {
     full_sequence: u32,
 };
 
-pub const VoidCookie = extern struct {
-    sequence: c_uint,
+pub const GenericErrorCode = enum(u8) {
+    none = 0,
+    request = 1,
+    value = 2,
+    window = 3,
+    pixmap = 4,
+    atom = 5,
+    cursor = 6,
+    font = 7,
+    match = 8,
+    drawable = 9,
+    access = 10,
+    alloc = 11,
+    colormap = 12,
+    graphics_context = 13,
+    id_choice = 14,
+    name = 15,
+    length = 16,
+    implementation = 17,
+
+    pub fn check(self: GenericErrorCode) !void {
+        return switch (self) {
+            .none => {},
+            .request => error.XcbRequestError,
+            .value => error.XcbValueError,
+            .window => error.XcbWindowError,
+            .pixmap => error.XcbPixmapError,
+            .atom => error.XcbAtomError,
+            .cursor => error.XcbCursorError,
+            .font => error.XcbFontError,
+            .match => error.XcbMatchError,
+            .drawable => error.XcbDrawableError,
+            .access => error.XcbAccessError,
+            .alloc => error.XcbAllocError,
+            .colormap => error.XcbColormapError,
+            .graphics_context => error.XcbGraphicsContextError,
+            .id_choice => error.XcbIdChoiceError,
+            .name => error.XcbNameError,
+            .length => error.XcbLengthError,
+            .implementation => error.XcbImplementationError,
+        };
+    }
 };
+
+pub fn Cookie(comptime name: @TypeOf(.enum_literal)) type {
+    _ = name;
+    return extern struct {
+        sequence: c_uint,
+    };
+}
+
+pub const VoidCookie = Cookie(.void);
+pub const GrabCookie = Cookie(.grab);
+pub const InternAtomCookie = Cookie(.intern_atom);
+pub const GetPropertyCookie = Cookie(.get_property);
+pub const GetInputFocusCookie = Cookie(.get_input_focus);
+pub const QueryTreeCookie = Cookie(.query_tree);
+pub const GeometryCookie = Cookie(.geometry);
 
 pub const GrabMode = enum(u8) {
     sync = 0,
     @"async" = 1,
 };
 
-pub const GrabPointerStatus = enum(u8) {
+pub const GrabStatus = enum(u8) {
     success = 0,
     already_grabbed = 1,
     invalid_time = 2,
@@ -907,8 +1373,75 @@ pub const GrabPointerStatus = enum(u8) {
     frozen = 4,
 };
 
-pub const GrabPointerCookie = extern struct {
-    sequence: c_uint,
+// TODO: enum types
+pub const GrabReply = extern struct {
+    response_type: u8,
+    status: GrabStatus,
+    sequence: u16,
+    length: u32,
+};
+
+pub const InternAtomReply = extern struct {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    atom: Atom,
+};
+
+pub const GetPropertyReply = extern struct {
+    response_type: u8,
+    format: u8,
+    sequence: u16,
+    length: u32,
+    type: Atom,
+    bytes_after: u32,
+    value_len: u32,
+    pad0: [12]u8,
+
+    pub fn getValue(self: *const GetPropertyReply) ?*anyopaque {
+        return xcb_get_property_value(self);
+    }
+    extern fn xcb_get_property_value(*const GetPropertyReply) ?*anyopaque;
+};
+
+pub const GetInputFocusReply = extern struct {
+    response_type: u8,
+    revert_to: u8, // TODO: what is?
+    sequence: u16,
+    length: u32,
+    focus: Window,
+};
+
+pub const QueryTreeReply = extern struct {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    length: u32,
+    root: Window,
+    parent: Window,
+    children_len: u16,
+    pad1: [14]u8,
+
+    pub fn children(self: *const QueryTreeReply) []Window {
+        return xcb_query_tree_children(self)[0..self.children_len];
+    }
+    extern fn xcb_query_tree_children(*const QueryTreeReply) [*]Window;
+
+    pub fn destroy(self: *QueryTreeReply) void {
+        xzb.destroy(self);
+    }
+};
+
+pub const AllowMode = enum(u8) {
+    async_pointer = 0,
+    sync_pointer = 1,
+    replay_pointer = 2,
+    async_keyboard = 3,
+    sync_keyboard = 4,
+    replay_keyboard = 5,
+    async_both = 6,
+    sync_both = 7,
 };
 
 pub const ShapeOperation = enum(u8) {
@@ -924,14 +1457,6 @@ pub const ShapeKind = enum(u8) {
     bounding = 0,
     clip = 1,
     input = 2,
-};
-
-// TODO: enum types
-pub const GrabPointerReply = extern struct {
-    response_type: u8,
-    status: GrabPointerStatus,
-    sequence: u16,
-    length: u32,
 };
 
 pub const Point = extern struct {
@@ -955,35 +1480,94 @@ pub const Rectangle = extern struct {
 };
 
 // TODO: add mouse buttons here too?????
+// TODO: fill in combinations for convenience, up through alt at least
 pub const ModMask = enum(u16) {
+    none = 0,
+
     shift = 1,
+
     lock = 2,
+    lock_shift = 3,
+
     control = 4,
+    control_shift = 5,
+    control_lock = 6,
+    control_lock_shift = 7,
+
     alt = 8,
+    alt_shift = 9,
+    alt_lock = 10,
+    alt_lock_shift = 11,
+    alt_control = 12,
+    alt_control_shift = 13,
+    alt_control_lock = 14,
+    alt_control_lock_shift = 15,
+
     mod_2 = 16,
+
     mod_3 = 32,
-    mod_4 = 64,
+
+    super = 64,
+    super_shift = 65,
+    super_control = 68,
+    super_control_shift = 69,
+    super_alt = 72,
+    super_alt_control = 76,
+    super_alt_control_shift = 77,
+
     mod_5 = 128,
+
+    button_left = 256,
+    button_middle = 512,
+    button_right = 1024,
+    // TODO: are these two correct? if so how does that work????
+    button_scroll_up = 2048,
+    button_scroll_down = 4096,
+
     any = 32768,
     _,
 
     pub fn new(mask_values: anytype) ModMask {
         var mask: u32 = 0;
         inline for (mask_values) |value| {
-            mask |= @enumToInt(value);
+            mask |= @enumToInt(@as(ModMask, value));
         }
         return @intToEnum(ModMask, mask);
     }
 
-    pub fn has(self: ModMask, mask_values: anytype) bool {
-        var mask: u32 = 0;
-        inline for (mask_values) |value| {
-            mask |= @enumToInt(value);
-        }
-        return @enumToInt(self) & mask == mask;
+    pub fn hasAny(self: ModMask, mask_values: anytype) bool {
+        const mask = @enumToInt(ModMask.new(mask_values));
+        return mask & @enumToInt(self) > 0;
+    }
+
+    pub fn hasAll(self: ModMask, mask_values: anytype) bool {
+        const mask = @enumToInt(ModMask.new(mask_values));
+        return mask & @enumToInt(self) == mask;
+    }
+
+    pub fn onlyKeys(self: ModMask) ModMask {
+        const button_mask = ModMask.new(.{
+            .button_left,
+            .button_middle,
+            .button_right,
+            .button_scroll_up,
+            .button_scroll_down,
+        });
+        return @intToEnum(ModMask, @enumToInt(self) & ~@enumToInt(button_mask));
+    }
+
+    pub fn onlyButtons(self: ModMask) ModMask {
+        const key_mask = ModMask.new(.{
+            .shift,   .lock,
+            .control, .alt,
+            .mod_2,   .mod_3,
+            .super,   .mod_5,
+        });
+        return @intToEnum(ModMask, @enumToInt(self) & ~@enumToInt(key_mask));
     }
 };
 
+// TODO: event type of 0 is error, figure out how exactly that looks in code
 pub const EventType = enum(u8) {
     key_press = 2,
     key_release = 3,
@@ -1021,7 +1605,7 @@ pub const EventType = enum(u8) {
     ge_generic = 35,
 };
 
-pub const EventMask = enum(c_int) {
+pub const EventMask = enum(u32) {
     no_event = 0,
     key_press = 1,
     key_release = 2,
@@ -1102,13 +1686,13 @@ pub const Event = union(EventType) {
     //     const address = switch (self) {
     //         inline else => |event| @ptrToInt(event) - 1,
     //     };
-    //     raw_allocator.destroy(@intToPtr(*Generic, address));
+    //     xzb.destroy(@intToPtr(*Generic, address));
     // }
 
     pub const Generic = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         pad: [7]u32,
         full_sequence: u32,
     };
@@ -1116,7 +1700,7 @@ pub const Event = union(EventType) {
     pub const KeyPress = extern struct {
         response_type: u8,
         detail: Keycode,
-        sequence: u16, // TODO: enum?
+        sequence: u16,
         time: Timestamp,
         root: Window,
         event: Window,
@@ -1131,10 +1715,10 @@ pub const Event = union(EventType) {
     };
     pub const KeyRelease = KeyPress;
 
-    pub const ButtonPress = extern struct {
+    pub const ButtonEvent = extern struct {
         response_type: u8,
-        detail: Button,
-        sequence: u16, //TODO:
+        detail: MouseButton,
+        sequence: u16,
         time: Timestamp,
         root: Window,
         event: Window,
@@ -1145,20 +1729,14 @@ pub const Event = union(EventType) {
         event_y: i16,
         state: ModMask,
         same_screen: bool,
-
-        pub const Button = enum(u8) {
-            left = 1,
-            middle = 2,
-            right = 3,
-            _,
-        };
     };
-    pub const ButtonRelease = ButtonPress;
+    pub const ButtonPress = ButtonEvent;
+    pub const ButtonRelease = ButtonEvent;
 
     pub const MotionNotify = extern struct {
         response_type: u8,
         detail: u8, // TODO: what is this???????
-        sequence: u16, // TODO:
+        sequence: u16,
         time: Timestamp,
         root: Window,
         event: Window,
@@ -1174,7 +1752,7 @@ pub const Event = union(EventType) {
     pub const EnterNotify = extern struct {
         response_type: u8,
         detail: u8, // TODO:
-        sequence: u16, // TODO:
+        sequence: u16,
         time: Timestamp,
         root: Window,
         event: Window,
@@ -1192,7 +1770,7 @@ pub const Event = union(EventType) {
     pub const FocusIn = extern struct {
         response_type: u8,
         detail: u8, // TODO:
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         mode: u8, // TODO: same as EnterNotify?
         pad0: [3]u8,
@@ -1207,7 +1785,7 @@ pub const Event = union(EventType) {
     pub const Expose = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         window: Window,
         x: u16,
         y: u16,
@@ -1220,7 +1798,7 @@ pub const Event = union(EventType) {
     pub const GraphicsExposure = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         drawable: Drawable,
         x: u16,
         y: u16,
@@ -1235,7 +1813,7 @@ pub const Event = union(EventType) {
     pub const NoExposure = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         drawable: Drawable,
         minor_opcode: u16, // TODO:
         major_opcode: u8, // TODO:
@@ -1245,7 +1823,7 @@ pub const Event = union(EventType) {
     pub const VisibilityNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         window: Window,
         state: u8, // TODO:
         pad1: [3]u8,
@@ -1254,7 +1832,7 @@ pub const Event = union(EventType) {
     pub const CreateNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         parent: Window,
         window: Window,
         x: u16,
@@ -1269,7 +1847,7 @@ pub const Event = union(EventType) {
     pub const DestroyNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         window: Window,
     };
@@ -1277,7 +1855,7 @@ pub const Event = union(EventType) {
     pub const UnmapNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         window: Window,
         from_configure: bool,
@@ -1297,7 +1875,7 @@ pub const Event = union(EventType) {
     pub const MapRequest = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         parent: Window,
         window: Window,
     };
@@ -1305,7 +1883,7 @@ pub const Event = union(EventType) {
     pub const ReparentNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         window: Window,
         parent: Window,
@@ -1318,7 +1896,7 @@ pub const Event = union(EventType) {
     pub const ConfigureNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         window: Window,
         above_sibling: Window,
@@ -1334,7 +1912,7 @@ pub const Event = union(EventType) {
     pub const ConfigureRequest = extern struct {
         response_type: u8,
         stack_mode: u8, // TODO:
-        sequence: u16, // TODO:
+        sequence: u16,
         parent: Window,
         window: Window,
         sibling: Window,
@@ -1349,7 +1927,7 @@ pub const Event = union(EventType) {
     pub const GravityNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         window: Window,
         x: u16,
@@ -1359,7 +1937,7 @@ pub const Event = union(EventType) {
     pub const ResizeRequest = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         window: Window,
         width: u16,
         height: u16,
@@ -1368,7 +1946,7 @@ pub const Event = union(EventType) {
     pub const CirculateNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         event: Window,
         window: Window,
         pad1: [4]u8,
@@ -1380,7 +1958,7 @@ pub const Event = union(EventType) {
     pub const PropertyNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         window: Window,
         atom: Atom,
         time: Timestamp,
@@ -1391,7 +1969,7 @@ pub const Event = union(EventType) {
     pub const SelectionClear = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         time: Timestamp,
         owner: Window,
         selection: Atom,
@@ -1400,7 +1978,7 @@ pub const Event = union(EventType) {
     pub const SelectionRequest = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         time: Timestamp,
         owner: Window,
         requestor: Window,
@@ -1412,7 +1990,7 @@ pub const Event = union(EventType) {
     pub const SelectionNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         time: Timestamp,
         requestor: Window,
         selection: Atom,
@@ -1423,7 +2001,7 @@ pub const Event = union(EventType) {
     pub const ColormapNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         window: Window,
         colormap: Colormap,
         _new: u8, // TODO:
@@ -1434,7 +2012,7 @@ pub const Event = union(EventType) {
     pub const ClientMessage = extern struct {
         response_type: u8,
         format: Format, // TODO:
-        sequence: u16, // TODO:
+        sequence: u16,
         window: Window,
         type: Atom,
         data: Data,
@@ -1451,7 +2029,7 @@ pub const Event = union(EventType) {
     pub const MappingNotify = extern struct {
         response_type: u8,
         pad0: u8,
-        sequence: u16, // TODO:
+        sequence: u16,
         request: u8, // TODO:
         first_keycode: Keycode,
         count: u8,
@@ -1468,3 +2046,11 @@ pub const Event = union(EventType) {
         full_sequence: u32,
     };
 };
+
+pub fn destroy(pointer: anytype) void {
+    raw_allocator.destroy(pointer);
+}
+
+pub fn free(memory: anytype) void {
+    raw_allocator.free(memory);
+}
