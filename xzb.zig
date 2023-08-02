@@ -25,7 +25,7 @@ pub const Timestamp = enum(u32) {
     _,
 };
 pub fn timestamp(time: u32) Timestamp {
-    return @intToEnum(Timestamp, time);
+    return @enumFromInt(time);
 }
 
 pub const Keycode = enum(u8) { any = 0, _ };
@@ -34,7 +34,7 @@ pub usingnamespace @import("keysym.zig");
 // pub const Keysym = xzb.Keysym;
 // pub fn keysymToNames(keysym: Keysym) []const u8 {
 //     var buf: [10]u8 = undefined;
-//     const keysym_string = std.fmt.bufPrint(&buf, "{d}", .{@enumToInt(keysym)}) catch unreachable;
+//     const keysym_string = std.fmt.bufPrint(&buf, "{d}", .{@intFromEnum(keysym)}) catch unreachable;
 //     inline for (@TypeOf(std.meta.fields(xzb.KeysymValues))) |field| {
 //         if (std.meta.eql(u8, keysym_string, field.name)) {
 //             return @field(xzb.KeysymValues, keysym_string);
@@ -44,7 +44,7 @@ pub usingnamespace @import("keysym.zig");
 //     return "";
 // }
 // pub fn keysym(value: u32) Keysym {
-//     return @intToEnum(Keysym, value);
+//     return @enumFromInt(Keysym, value);
 // }
 pub const MouseButton = enum(u8) {
     any = 0,
@@ -116,7 +116,7 @@ pub const Connection = opaque {
             Window, Pixmap, GraphicsContext, Colormap, Font => {},
             else => @compileError("Invalid type '" ++ @typeName(T) ++ "' for Connection.generateId()!"),
         }
-        return @intToEnum(T, xcb_generate_id(self));
+        return @enumFromInt(xcb_generate_id(self));
     }
     extern fn xcb_generate_id(c: *Connection) u32;
 
@@ -144,7 +144,7 @@ pub const Connection = opaque {
     // TODO: figure out when XCB_EVENT_MASK_NO_EVENT can happen, seems to be on error?
     pub fn waitForEvent(self: *Connection) !Event {
         const generic_event = xcb_wait_for_event(self) orelse return error.XcbEventIOError;
-        const tag = @intToEnum(EventType, generic_event.response_type & ~@as(u8, 0x80));
+        const tag: EventType = @enumFromInt(generic_event.response_type & ~@as(u8, 0x80));
 
         const result = switch (tag) {
             inline else => |event_type| value: {
@@ -155,7 +155,8 @@ pub const Connection = opaque {
                     }
                 };
 
-                break :value @unionInit(Event, @tagName(event_type), @ptrCast(*T, generic_event).*);
+                const pointer: *T = @ptrCast(generic_event);
+                break :value @unionInit(Event, @tagName(event_type), pointer.*);
             },
         };
 
@@ -166,7 +167,7 @@ pub const Connection = opaque {
 
     pub fn pollForEvent(self: *Connection) !?Event {
         const generic_event = xcb_poll_for_event(self) orelse return null;
-        const tag = @intToEnum(EventType, generic_event.response_type & ~@as(u8, 0x80));
+        const tag: EventType = @enumFromInt(generic_event.response_type & ~@as(u8, 0x80));
 
         const result = switch (tag) {
             inline else => |event_type| value: {
@@ -177,7 +178,8 @@ pub const Connection = opaque {
                     }
                 };
 
-                break :value @unionInit(Event, @tagName(event_type), @ptrCast(*T, generic_event).*);
+                const pointer: *T = @ptrCast(generic_event);
+                break :value @unionInit(Event, @tagName(event_type), pointer.*);
             },
         };
 
@@ -188,7 +190,7 @@ pub const Connection = opaque {
 
     pub fn pollForQueuedEvent(self: *Connection) ?Event {
         const generic_event = xcb_poll_for_queued_event(self) orelse return null;
-        const tag = @intToEnum(EventType, generic_event.response_type & ~@as(u8, 0x80));
+        const tag: EventType = @enumFromInt(generic_event.response_type & ~@as(u8, 0x80));
 
         const result = switch (tag) {
             inline else => |event_type| value: {
@@ -199,7 +201,8 @@ pub const Connection = opaque {
                     }
                 };
 
-                break :value @unionInit(Event, @tagName(event_type), @ptrCast(*T, generic_event).*);
+                const pointer: *T = @ptrCast(generic_event);
+                break :value @unionInit(Event, @tagName(event_type), pointer.*);
             },
         };
 
@@ -418,7 +421,7 @@ pub const Connection = opaque {
         only_if_exists: bool,
         name: []const u8,
     ) Atom {
-        const cookie = xcb_intern_atom(self, only_if_exists, @truncate(u16, name.len), name.ptr);
+        const cookie = xcb_intern_atom(self, only_if_exists, @truncate(name.len), name.ptr);
 
         // var err: *GenericError = undefined;
         const reply = xcb_intern_atom_reply(self, cookie, null);
@@ -438,7 +441,8 @@ pub const Connection = opaque {
         // TODO: if the atom exists is the property guaranteed to exist?
         const property_reply = root.getProperty(self, false, active_window_atom, .window, 0, 1);
         const data = property_reply.getValue().?;
-        return @ptrCast(*Window, @alignCast(@alignOf(*Window), data)).*;
+        const pointer: *Window = @ptrCast(@alignCast(data));
+        return pointer.*;
     }
 
     // TODO: error not getting filled?
@@ -519,9 +523,9 @@ pub const KeySymbols = opaque {
     //         std.debug.print("KEYCODE NULL\n", .{});
     //         return &.{};
     //     };
-    //     return std.mem.sliceTo(keycodes, @intToEnum(Keycode, 0));
+    //     return std.mem.sliceTo(keycodes, @enumFromInt(Keycode, 0));
     // }
-    // extern fn xcb_key_symbols_get_keycode(syms: *KeySymbols, keysym: xzb.Keysym) ?[*:@intToEnum(Keycode, 0)]Keycode;
+    // extern fn xcb_key_symbols_get_keycode(syms: *KeySymbols, keysym: xzb.Keysym) ?[*:@enumFromInt(Keycode, 0)]Keycode;
 
     const keysyms_per_keycode = 4;
     pub fn getKeycode(self: *KeySymbols, connection: *Connection, keysym: xzb.Keysym) ![]Keycode {
@@ -530,16 +534,16 @@ pub const KeySymbols = opaque {
         const setup = try connection.getSetup();
 
         {
-            const min_keycode: u8 = @enumToInt(setup.min_keycode);
-            const max_keycode: u8 = @enumToInt(setup.max_keycode);
+            const min_keycode: u8 = @intFromEnum(setup.min_keycode);
+            const max_keycode: u8 = @intFromEnum(setup.max_keycode);
             var keycode: u8 = min_keycode;
             while (keycode < max_keycode) : (keycode += 1) {
                 {
                     var column: u8 = 0;
                     while (column < keysyms_per_keycode) : (column += 1) {
-                        const ks = self.getKeysym(@intToEnum(Keycode, keycode), column);
+                        const ks = self.getKeysym(@enumFromInt(keycode), column);
                         if (ks == keysym) {
-                            result[result_len] = @intToEnum(Keycode, keycode);
+                            result[result_len] = @enumFromInt(keycode);
                             result_len += 1;
                         }
                     }
@@ -598,7 +602,7 @@ pub const Font = enum(u32) {
         name: []const u8,
     ) Font {
         const font = try connection.generateId(Font);
-        xcb_open_font(connection, font, @truncate(u16, name.len), name.ptr);
+        xcb_open_font(connection, font, @truncate(name.len), name.ptr);
     }
     extern fn xcb_open_font(c: *Connection, fid: Font, name_len: u16, name: [*]const u8) VoidCookie;
 };
@@ -753,14 +757,14 @@ pub const VisualId = enum(u32) {
     copy_from_parent = 0,
     _,
 
-    // pub const copy_from_parent = VisualId{ .id = @intToEnum(VisualId, 0) };
+    // pub const copy_from_parent = VisualId{ .id = @enumFromInt(VisualId, 0) };
 };
 
 pub const Window = enum(u32) {
     none = 0,
     _,
 
-    // pub const none = Window{ .id = @intToEnum(Window, 0) };
+    // pub const none = Window{ .id = @enumFromInt(Window, 0) };
 
     pub const Options = struct {
         depth: u8, // TODO: figure out legal depth values
@@ -799,9 +803,9 @@ pub const Window = enum(u32) {
         pub fn new(mask: anytype) ValueMask {
             var result: u32 = 0;
             inline for (mask) |value| {
-                result |= @enumToInt(value);
+                result |= @intFromEnum(value);
             }
-            return @intToEnum(ValueMask, result);
+            return @enumFromInt(result);
         }
     };
 
@@ -856,9 +860,9 @@ pub const Window = enum(u32) {
                 const FieldT = @TypeOf(field_value);
                 mask = comptime ValueMask.new(.{ mask, @field(ValueMask, field.name) });
                 value_list[i] = if (FieldT == bool)
-                    @boolToInt(field_value)
+                    @intFromBool(field_value)
                 else
-                    @bitCast(u32, field_value);
+                    @bitCast(field_value);
                 i += 1;
             }
         }
@@ -960,7 +964,7 @@ pub const Window = enum(u32) {
             property,
             property_type,
             format,
-            @truncate(u32, data.len),
+            @truncate(data.len),
             data.ptr,
         );
     }
@@ -1121,9 +1125,9 @@ pub const GraphicsContext = enum(u32) {
         pub fn new(mask: anytype) ValueMask {
             var result: u32 = 0;
             inline for (mask) |value| {
-                result |= @enumToInt(@as(ValueMask, value));
+                result |= @intFromEnum(@as(ValueMask, value));
             }
-            return @intToEnum(ValueMask, result);
+            return @enumFromInt(result);
         }
     };
 
@@ -1179,9 +1183,9 @@ pub const GraphicsContext = enum(u32) {
                 const FieldT = @TypeOf(field_value);
                 mask = comptime ValueMask.new(.{ mask, @field(ValueMask, field.name) });
                 value_list[i] = if (FieldT == bool)
-                    @boolToInt(field_value)
+                    @intFromBool(field_value)
                 else
-                    @bitCast(u32, field_value);
+                    @bitCast(field_value);
                 i += 1;
             }
         }
@@ -1208,9 +1212,9 @@ pub const GraphicsContext = enum(u32) {
                 const FieldT = @TypeOf(field_value);
                 mask = comptime ValueMask.new(.{ mask, @field(ValueMask, field.name) });
                 value_list[i] = if (FieldT == bool)
-                    @boolToInt(field_value)
+                    @intFromBool(field_value)
                 else
-                    @bitCast(u32, field_value);
+                    @bitCast(field_value);
                 i += 1;
             }
         }
@@ -1234,7 +1238,7 @@ pub const GraphicsContext = enum(u32) {
             options.coordinate_mode,
             drawable,
             self,
-            @truncate(u32, points.len),
+            @truncate(points.len),
             points.ptr,
         );
     }
@@ -1250,7 +1254,7 @@ pub const GraphicsContext = enum(u32) {
             connection,
             drawable,
             self,
-            @truncate(u32, rectangles.len),
+            @truncate(rectangles.len),
             rectangles.ptr,
         );
     }
@@ -1530,19 +1534,19 @@ pub const ModMask = enum(u16) {
     pub fn new(mask_values: anytype) ModMask {
         var mask: u32 = 0;
         inline for (mask_values) |value| {
-            mask |= @enumToInt(@as(ModMask, value));
+            mask |= @intFromEnum(@as(ModMask, value));
         }
-        return @intToEnum(ModMask, mask);
+        return @enumFromInt(mask);
     }
 
     pub fn hasAny(self: ModMask, mask_values: anytype) bool {
-        const mask = @enumToInt(ModMask.new(mask_values));
-        return mask & @enumToInt(self) > 0;
+        const mask = @intFromEnum(ModMask.new(mask_values));
+        return mask & @intFromEnum(self) > 0;
     }
 
     pub fn hasAll(self: ModMask, mask_values: anytype) bool {
-        const mask = @enumToInt(ModMask.new(mask_values));
-        return mask & @enumToInt(self) == mask;
+        const mask = @intFromEnum(ModMask.new(mask_values));
+        return mask & @intFromEnum(self) == mask;
     }
 
     pub fn onlyKeys(self: ModMask) ModMask {
@@ -1553,7 +1557,7 @@ pub const ModMask = enum(u16) {
             .button_scroll_up,
             .button_scroll_down,
         });
-        return @intToEnum(ModMask, @enumToInt(self) & ~@enumToInt(button_mask));
+        return @enumFromInt(@intFromEnum(self) & ~@intFromEnum(button_mask));
     }
 
     pub fn onlyButtons(self: ModMask) ModMask {
@@ -1563,7 +1567,7 @@ pub const ModMask = enum(u16) {
             .mod_2,   .mod_3,
             .super,   .mod_5,
         });
-        return @intToEnum(ModMask, @enumToInt(self) & ~@enumToInt(key_mask));
+        return @enumFromInt(@intFromEnum(self) & ~@intFromEnum(key_mask));
     }
 };
 
@@ -1637,9 +1641,9 @@ pub const EventMask = enum(u32) {
     pub fn new(mask: anytype) EventMask {
         var result: u32 = 0;
         inline for (mask) |value| {
-            result |= @enumToInt(@as(EventMask, value));
+            result |= @intFromEnum(@as(EventMask, value));
         }
-        return @intToEnum(EventMask, result);
+        return @enumFromInt(result);
     }
 };
 
