@@ -127,7 +127,7 @@ pub const Connection = opaque {
     extern fn xcb_get_setup(c: *Connection) *const Setup;
 
     pub fn destroy(self: *Connection, comptime T: type, thing: T) void {
-        comptime var function = switch (T) {
+        const function = switch (T) {
             Window => xcb_destroy_window,
             Pixmap => xcb_free_pixmap,
             GraphicsContext => xcb_free_gc,
@@ -456,7 +456,7 @@ pub const Connection = opaque {
 
         // try err.error_code.check();
 
-        var result = reply.focus;
+        const result = reply.focus;
 
         return result;
     }
